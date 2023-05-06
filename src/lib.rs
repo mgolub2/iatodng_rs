@@ -10,7 +10,7 @@ mod tests {
 
     #[test]
     fn test_meta_info() {
-        let pwad = Pwad::from_file("src/6C486AFC.IA").unwrap();
+        let pwad = Pwad::from_file("002500E8.EMO/6C486AFC.IA").unwrap();
         println!("{:?}", pwad);
         let metab = pwad.read_lump_by_tag(META_KEY).unwrap();
         assert!(metab.len() > 0);

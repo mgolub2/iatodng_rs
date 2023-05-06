@@ -46,10 +46,7 @@ impl Pwad {
     }
 
     pub fn read_lump_by_tag(&self, tag: &str) -> io::Result<Vec<u8>> {
-        let lump = self
-            .directory
-            .iter()
-            .find(|entry| entry.name == tag);
+        let lump = self.directory.iter().find(|entry| entry.name == tag);
         match lump {
             Some(lump) => {
                 let mut file = File::open(&self.filename)?;

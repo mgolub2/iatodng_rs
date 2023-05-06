@@ -25,6 +25,12 @@ fn main() {
     let metadata = iatodng::sinar_ia::SinarIAMeta::process_meta(&meta);
     println!("{:?}", &metadata);
     let parent_dir = &args.file.parent().unwrap();
-    println!("black_ref exists: {}", parent_dir.join(metadata.black_ref).exists());
-    println!("white_ref exists: {}", parent_dir.join(metadata.white_ref).exists());
+    println!(
+        "black_ref exists: {}",
+        parent_dir.join(metadata.black_ref).exists()
+    );
+    println!(
+        "white_ref exists: {}",
+        parent_dir.join(metadata.white_ref).exists()
+    );
 }
