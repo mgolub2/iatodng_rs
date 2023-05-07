@@ -2,11 +2,11 @@ extern crate ndarray;
 
 use crate::pwad;
 use ndarray::parallel::prelude::{IntoParallelRefIterator, ParallelIterator};
-use ndarray::{Array1, Array2, Zip};
+use ndarray::{Array1, Array2, Zip, OwnedRepr, Dim};
 use phf::phf_map;
 use rawler::dng::{rect_to_dng_area, DNG_VERSION_V1_1, DNG_VERSION_V1_6};
 use rawler::formats::tiff::{
-    CompressionMethod, PhotometricInterpretation, SRational, TiffError, TiffWriter, Rational,
+    CompressionMethod, PhotometricInterpretation, SRational, TiffError, TiffWriter, Rational, DirectoryWriter,
 };
 use rawler::imgop::xyz::Illuminant;
 use rawler::imgop::{Dim2, Point, Rect};
@@ -26,6 +26,8 @@ pub const BLACK0_KEY: &str = "BLACK0\0\0";
 pub const BLACK1_KEY: &str = "BLACK1\0\0";
 pub const WHITE_KEY: &str = "WHITE\0\0\0";
 pub const CROP: u32 = 8;
+pub const THUMB_WD: u32 = 356;
+pub const THUMB_HT: u32 = 476;
 
 pub static MODEL_NAMES: phf::Map<&'static str, &'static str> = phf_map! {
     "e22" => "Emotion 22",
@@ -133,7 +135,7 @@ impl SinarIAMeta {
     }
 }
 
-fn buffer_to_1d_array_f64(buffer: &Vec<u8>, width: usize, height: usize) -> Array1<f64> {
+fn bufferu8_u16_to_1d_array_f64(buffer: &Vec<u8>, width: usize, height: usize) -> Array1<f64> {
     assert_eq!(buffer.len(), width * height * 2);
 
     let mut array = Array1::zeros(height * width);
@@ -232,11 +234,12 @@ fn matrix_to_tiff_value(xyz_to_cam: &Vec<f64>, d: i32) -> Vec<SRational> {
 
 fn write_1d_array_to_dng(
     image: &Array1<f64>,
+    thumb: &[u8],
     path: &PathBuf,
     meta: &SinarIAMeta,
 ) -> Result<(), TiffError> {
-    let new_dng = path.to_str().unwrap();
-    println!("\tWriting DNG to {}", new_dng);
+    let new_dng = path.join(format!("{}.dng", meta.shutter_count)); 
+    println!("\tWriting DNG to {}", new_dng.display());
     let file = File::create(new_dng).unwrap();
     let mut output = BufWriter::new(file);
     let mut dng = TiffWriter::new(&mut output).unwrap();
@@ -246,11 +249,26 @@ fn write_1d_array_to_dng(
         Rational::new_f32(1.0, 100000),
         Rational::new_f32(1.0, 100000),  
     ];
-    root_ifd.add_tag(TiffCommonTag::PhotometricInt, PhotometricInterpretation::CFA)?;
+    root_ifd.add_tag(TiffCommonTag::PhotometricInt, PhotometricInterpretation::RGB)?;
+    root_ifd.add_tag(TiffCommonTag::NewSubFileType, 1_u16)?;
+
+    root_ifd.add_tag(TiffCommonTag::Orientation, 7_u16)?;
+    //356x476 thumbnail
+    root_ifd.add_tag(TiffCommonTag::ImageWidth, THUMB_WD)?;
+    root_ifd.add_tag(TiffCommonTag::ImageLength, THUMB_HT)?;
+    root_ifd.add_tag(TiffCommonTag::Compression, CompressionMethod::None)?;
+    root_ifd.add_tag(TiffCommonTag::BitsPerSample, 8_u8)?;
+    root_ifd.add_tag(TiffCommonTag::SampleFormat, [1_u16, 1, 1])?;
+    root_ifd.add_tag(TiffCommonTag::SamplesPerPixel, 3_u16)?;
+    
+    let offset = root_ifd.write_data(&thumb)?;
+  
+    root_ifd.add_tag(TiffCommonTag::StripOffsets, offset)?;
+    root_ifd.add_tag(TiffCommonTag::StripByteCounts, thumb.len() as u32)?;
+    root_ifd.add_tag(TiffCommonTag::RowsPerStrip, 476)?;
+
     root_ifd.add_tag(DngTag::AsShotNeutral, &wb_coeff[..])?;
-    root_ifd.add_tag(TiffCommonTag::NewSubFileType, 0_u16)?;
-    root_ifd.add_tag(TiffCommonTag::ImageWidth, meta.width as u32)?;
-    root_ifd.add_tag(TiffCommonTag::ImageLength, meta.height as u32)?;
+
     root_ifd.add_tag(TiffCommonTag::Software, "iatodng_rs v1.0")?;
     root_ifd.add_tag(DngTag::DNGVersion, &DNG_VERSION_V1_6[..])?;
     root_ifd.add_tag(DngTag::DNGBackwardVersion, &DNG_VERSION_V1_1[..])?;
@@ -275,48 +293,62 @@ fn write_1d_array_to_dng(
         )
         .as_slice(),
     )?;
-    
+
+    let mut r_ifd = root_ifd.new_directory();
+    write_dng_data(&mut r_ifd, meta, image)?;
+    let r_off = r_ifd.build()?;
+    let mut sub_ifds = Vec::new();
+    sub_ifds.push(r_off);
+    write_exif_data(&mut root_ifd, meta)?;
+    root_ifd.add_tag(TiffCommonTag::SubIFDs, &sub_ifds)?;
+    let dng_off = root_ifd.build()?;
+    dng.build(dng_off)?;
+
+    Ok(())
+}
+
+fn write_dng_data(r_ifd: &mut DirectoryWriter, meta: &SinarIAMeta, image: &ndarray::ArrayBase<OwnedRepr<f64>, Dim<[usize; 1]>>) -> Result<(), TiffError> {
     let full_size = Rect::new(
         Point::new(0, 0),
         Dim2::new(meta.width as usize, meta.height as usize),
     );
-
-    root_ifd.add_tag(DngTag::ActiveArea, rect_to_dng_area(&full_size))?;
-    root_ifd.add_tag(ExifTag::PlanarConfiguration, 1_u16)?;
-    root_ifd.add_tag(
+    r_ifd.add_tag(TiffCommonTag::NewSubFileType, 0_u16)?;
+    r_ifd.add_tag(DngTag::ActiveArea, rect_to_dng_area(&full_size))?;
+    r_ifd.add_tag(ExifTag::PlanarConfiguration, 1_u16)?;
+    r_ifd.add_tag(
         TiffCommonTag::PhotometricInt,
         PhotometricInterpretation::CFA,
     )?;
-    root_ifd.add_tag(TiffCommonTag::SamplesPerPixel, 1_u16)?;
-    root_ifd.add_tag(TiffCommonTag::BitsPerSample, [16_u16])?;
-    root_ifd.add_tag(DngTag::CFALayout, 1_u16)?; // Square layout
-    root_ifd.add_tag(TiffCommonTag::CFAPattern, [0u8, 1u8, 1u8, 2u8])?; // RGGB
-    root_ifd.add_tag(TiffCommonTag::CFARepeatPatternDim, [2u16, 2u16])?;
-    root_ifd.add_tag(DngTag::CFAPlaneColor, [0u8, 1u8, 2u8])?; // RGGB
-    root_ifd.add_tag(TiffCommonTag::Compression, CompressionMethod::None)?;
+    r_ifd.add_tag(TiffCommonTag::ImageWidth, meta.width as u32)?;
+    r_ifd.add_tag(TiffCommonTag::ImageLength, meta.height as u32)?;
+    r_ifd.add_tag(TiffCommonTag::SamplesPerPixel, 1_u16)?;
+    r_ifd.add_tag(TiffCommonTag::BitsPerSample, [16_u16])?;
+    r_ifd.add_tag(DngTag::CFALayout, 1_u16)?;
+    r_ifd.add_tag(TiffCommonTag::CFAPattern, [0u8, 1u8, 1u8, 2u8])?;
+    r_ifd.add_tag(TiffCommonTag::CFARepeatPatternDim, [2u16, 2u16])?;
+    r_ifd.add_tag(DngTag::CFAPlaneColor, [0u8, 1u8, 2u8])?;
+    r_ifd.add_tag(TiffCommonTag::Compression, CompressionMethod::None)?;
     let mut strip_offsets: Vec<u32> = Vec::new();
     let mut strip_sizes: Vec<u32> = Vec::new();
     let mut strip_rows: Vec<u32> = Vec::new();
-
-    // 8 Strips
     let rows_per_strip = meta.height / 1;
     let u16_image = scale_1d_f64_to_pix_u16(image);
     for strip in u16_image
         .chunks((rows_per_strip * meta.width) as usize)
         .into_iter()
     {
-        let offset = root_ifd.write_data_u16_be(strip)?;
+        let offset = r_ifd.write_data_u16_be(strip)?;
         strip_offsets.push(offset);
         strip_sizes.push((strip.len() * size_of::<u16>()) as u32);
         strip_rows.push((strip.len() / meta.width as usize) as u32);
     }
+    r_ifd.add_tag(TiffCommonTag::StripOffsets, &strip_offsets)?;
+    r_ifd.add_tag(TiffCommonTag::StripByteCounts, &strip_sizes)?;
+    r_ifd.add_tag(TiffCommonTag::RowsPerStrip, &strip_rows)?;
+    Ok(())
+}
 
-    root_ifd.add_tag(TiffCommonTag::StripOffsets, &strip_offsets)?;
-    root_ifd.add_tag(TiffCommonTag::StripByteCounts, &strip_sizes)?;
-    root_ifd.add_tag(TiffCommonTag::RowsPerStrip, &strip_rows)?;
-    root_ifd.add_tag(TiffCommonTag::Orientation, 7_u16)?;
-
-    // Add EXIF information
+fn write_exif_data(root_ifd: &mut rawler::formats::tiff::DirectoryWriter, meta: &SinarIAMeta) -> Result<(), TiffError> {
     let exif_offset = {
         let mut exif_ifd = root_ifd.new_directory();
         // Add EXIF version 0220
@@ -325,17 +357,13 @@ fn write_1d_array_to_dng(
         exif_ifd.build()?
     };
     root_ifd.add_tag(TiffCommonTag::ExifIFDPointer, exif_offset)?;
-
-    let ifd0_offset = root_ifd.build()?;
-    dng.build(ifd0_offset)?;
-
     Ok(())
 }
 
 fn fill_exif_ifd(exif_ifd: &mut rawler::formats::tiff::DirectoryWriter, meta: &SinarIAMeta) -> Result<(), TiffError>{
     exif_ifd.add_tag(ExifTag::FNumber, Rational::new_f32(meta.f_stop, 10_000))?;
     //exif_ifd.add_tag(ExifTag::ApertureValue, Rational::new_f32(meta.f_stop, 10_000))?;
-    exif_ifd.add_tag(ExifTag::ISOSpeed, meta.iso)?;
+    exif_ifd.add_tag(ExifTag::ISOSpeedRatings, meta.iso)?;
     exif_ifd.add_tag(ExifTag::FocalLength, Rational::new_f32(meta.focal_length, 10_00))?;
     //add serial number
     exif_ifd.add_tag(ExifTag::SerialNumber, meta.serial.clone())?;
@@ -360,17 +388,17 @@ pub fn process_ia(path: &PathBuf, output_dir: &PathBuf) -> Option<()> {
             );
             pwad::Pwad::from_file(black_full_path.to_str().unwrap()).and_then(|black| {
                 Ok({
-                    let mut raw = buffer_to_1d_array_f64(
+                    let mut raw = bufferu8_u16_to_1d_array_f64(
                         &metadata.read_lump_by_tag(RAW_KEY)?,
                         ia.width as usize,
                         ia.height as usize,
                     );
-                    let black_ref0 = buffer_to_1d_array_f64(
+                    let black_ref0 = bufferu8_u16_to_1d_array_f64(
                         &black.read_lump_by_tag(BLACK0_KEY)?,
                         ia.width as usize,
                         ia.height as usize,
                     );
-                    let black_ref1 = buffer_to_1d_array_f64(
+                    let black_ref1 = bufferu8_u16_to_1d_array_f64(
                         &black.read_lump_by_tag(BLACK1_KEY)?,
                         ia.width as usize,
                         ia.height as usize,
@@ -381,7 +409,7 @@ pub fn process_ia(path: &PathBuf, output_dir: &PathBuf) -> Option<()> {
                             Ok({
                                 apply_white_ref_mut(
                                     &mut raw,
-                                    &buffer_to_1d_array_f64(
+                                    &bufferu8_u16_to_1d_array_f64(
                                         &white.read_lump_by_tag(WHITE_KEY)?,
                                         ia.width as usize,
                                         ia.height as usize,
@@ -390,7 +418,7 @@ pub fn process_ia(path: &PathBuf, output_dir: &PathBuf) -> Option<()> {
                             })
                         })
                         .ok();
-                    write_1d_array_to_dng(&raw, &output_dir.join(path.with_extension("dng").file_name().unwrap()), &ia).unwrap()
+                    write_1d_array_to_dng(&raw, &metadata.read_lump_by_tag(THUMB_KEY)?, &output_dir, &ia).unwrap()
                 })
             })
         })
