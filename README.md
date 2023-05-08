@@ -6,17 +6,15 @@ A rust utility to convert Sinar IA images to DNG files.
 
 Make sure you have cargo / rust installed:
     
-    ```bash 
+     
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-    ```
+
 
 Then: 
 
-    ```bash
     git clone https://github.com/mgolub2/iatodng_rs.git
     cargo install --path .
-    ```
-    
+
 This will install `iatodng` and a utility called `pwad` to your cargo bin directory. 
 `iatodng` is the utility to convert IA files to DNGs, and `pwad` is a utility to print information about IA, BR, and WR PWAD files.
 
