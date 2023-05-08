@@ -8,12 +8,12 @@ use std::path::PathBuf;
 use std::str;
 
 //Contants for parsing the IA file
-pub const META_KEY: &str = "META\0\0\0\0";
-pub const RAW_KEY: &str = "RAW0\00\0\0";
-pub const THUMB_KEY: &str = "THUMB\0\0\0";
-pub const BLACK0_KEY: &str = "BLACK0\0\0";
-pub const BLACK1_KEY: &str = "BLACK1\0\0";
-pub const WHITE_KEY: &str = "WHITE\0\0\0";
+pub const META_KEY: &str = "META";
+pub const RAW_KEY: &str = "RAW0";
+pub const THUMB_KEY: &str = "THUMB";
+pub const BLACK0_KEY: &str = "BLACK0";
+pub const BLACK1_KEY: &str = "BLACK1";
+pub const WHITE_KEY: &str = "WHITE";
 pub const CROP: u32 = 8;
 pub const THUMB_WD: u32 = 356;
 pub const THUMB_HT: u32 = 476;

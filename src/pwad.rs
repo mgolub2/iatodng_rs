@@ -46,7 +46,10 @@ impl Pwad {
     }
 
     pub fn read_lump_by_tag(&self, tag: &str) -> io::Result<Vec<u8>> {
-        let lump = self.directory.iter().find(|entry| entry.name == tag);
+        let lump = self
+            .directory
+            .iter()
+            .find(|entry| entry.name.starts_with(tag));
         match lump {
             Some(lump) => {
                 let mut file = File::open(&self.filename)?;
@@ -93,7 +96,7 @@ fn read_lump_directory<R: Read + Seek>(
 
         let mut name = vec![0; 8];
         reader.read_exact(&mut name)?;
-        let name = String::from_utf8(name).unwrap();
+        let name = String::from_utf8_lossy(&name).to_string();
 
         directory.push(LumpDirectoryEntry { offset, size, name });
     }
