@@ -17,6 +17,7 @@ pub const WHITE_KEY: &str = "WHITE";
 pub const CROP: u32 = 8;
 pub const THUMB_WD: u32 = 356;
 pub const THUMB_HT: u32 = 476;
+pub const E75_CFA: [u8; 4] = [0u8, 1u8, 1u8, 2u8];
 
 pub static MODEL_NAMES: phf::Map<&'static str, &'static str> = phf_map! {
     "e22" => "Emotion 22",

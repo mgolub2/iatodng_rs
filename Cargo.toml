@@ -3,12 +3,20 @@ name = "iatodng"
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+opt-level = 3
+debug = 0
+lto = "fat"
+
 
 [dependencies]
 byteorder = "1.4.3"
+cacao = { version = "0.3.2" }
 chrono = "0.4.24"
 clap = { version = "4.2.4", features = ["derive"] }
 ndarray = { version = "0.15.6", features = ["blas", "rayon", "matrixmultiply-threading"] }
 phf = { version = "0.11.1", features = ["macros"] }
+rand = "0.8.5"
 rawler = { git = "https://github.com/dnglab/dnglab.git", version = "0.5.1" }
 rayon = "1.7.0"
+viuer = { version = "0.6.2", features = ["sixel-rs"] }

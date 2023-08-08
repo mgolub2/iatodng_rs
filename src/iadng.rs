@@ -13,7 +13,7 @@ use rawler::{
 
 use std::{fs::File, io::BufWriter, mem::size_of, path::PathBuf};
 
-use crate::sinar_ia::{SinarIAMeta, THUMB_HT, THUMB_WD};
+use crate::sinar_ia::{SinarIAMeta, E75_CFA, THUMB_HT, THUMB_WD};
 
 fn scale_1d_f64_u16(image: &Array1<f64>) -> Vec<u16> {
     let mut min = 0.0;
@@ -42,6 +42,50 @@ fn matrix_to_tiff_value(xyz_to_cam: &Vec<f64>, d: i32) -> Vec<SRational> {
         .collect()
 }
 
+fn estimate_white_balance(
+    raw_bayer_data: &Array1<f64>,
+    width: usize,
+    cfa_layout: [u8; 4],
+) -> (f64, f64, f64) {
+    let mut r_sum = 0.0;
+    let mut g_sum = 0.0;
+    let mut b_sum = 0.0;
+
+    let mut r_count = 0;
+    let mut g_count = 0;
+    let mut b_count = 0;
+
+    for (i, &value) in raw_bayer_data.iter().enumerate() {
+        let x = i % width;
+        let y = i / width;
+        let color = cfa_layout[((y & 1) << 1) + (x & 1)];
+
+        match color {
+            0 => {
+                r_sum += value;
+                r_count += 1;
+            }
+            1 => {
+                g_sum += value;
+                g_count += 1;
+            }
+            2 => {
+                b_sum += value;
+                b_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let r_avg = r_sum / r_count as f64;
+    let g_avg = g_sum / g_count as f64;
+    let b_avg = b_sum / b_count as f64;
+
+    let max_avg = r_avg.max(g_avg).max(b_avg);
+
+    (r_avg / max_avg, g_avg / max_avg, b_avg / max_avg)
+}
+
 pub(crate) fn write_1d_array_to_dng(
     image: &Array1<f64>,
     thumb: &[u8],
@@ -50,15 +94,20 @@ pub(crate) fn write_1d_array_to_dng(
 ) -> Result<(), TiffError> {
     let new_dng = path.join(format!("{}.dng", meta.shutter_count));
     println!("\tWriting DNG to {}", new_dng.display());
+    if new_dng.exists() {
+        println!("\tDNG already exists, skipping");
+        return Ok(());
+    }
     let file = File::create(new_dng).unwrap();
     let mut output = BufWriter::new(file);
     let mut dng = TiffWriter::new(&mut output).unwrap();
     let mut root_ifd = dng.new_directory();
-    let wb_coeff = vec![
-        Rational::new_f32(1.0, 100000),
-        Rational::new_f32(1.0, 100000),
-        Rational::new_f32(1.0, 100000),
-    ];
+    let wb_coeff_tup = estimate_white_balance(&image, meta.width as usize, E75_CFA);
+    println!(
+        "\tWhite balance: R: {}, G: {}, B: {}",
+        wb_coeff_tup.0, wb_coeff_tup.1, wb_coeff_tup.2
+    );
+    let wb_coeff = vec![wb_coeff_tup.0, wb_coeff_tup.1, wb_coeff_tup.2];
     root_ifd.add_tag(
         TiffCommonTag::PhotometricInt,
         PhotometricInterpretation::RGB,
@@ -93,7 +142,7 @@ pub(crate) fn write_1d_array_to_dng(
         ExifTag::ModifyDate,
         chrono::Local::now().format("%Y:%m:%d %H:%M:%S").to_string(),
     )?;
-    root_ifd.add_tag(DngTag::CalibrationIlluminant1, u16::from(Illuminant::D50))?;
+    root_ifd.add_tag(DngTag::CalibrationIlluminant1, u16::from(Illuminant::D65))?;
     root_ifd.add_tag(
         DngTag::ColorMatrix1,
         matrix_to_tiff_value(
@@ -140,7 +189,7 @@ pub(crate) fn write_dng_data(
     r_ifd.add_tag(TiffCommonTag::SamplesPerPixel, 1_u16)?;
     r_ifd.add_tag(TiffCommonTag::BitsPerSample, [16_u16])?;
     r_ifd.add_tag(DngTag::CFALayout, 1_u16)?;
-    r_ifd.add_tag(TiffCommonTag::CFAPattern, [0u8, 1u8, 1u8, 2u8])?;
+    r_ifd.add_tag(TiffCommonTag::CFAPattern, E75_CFA)?;
     r_ifd.add_tag(TiffCommonTag::CFARepeatPatternDim, [2u16, 2u16])?;
     r_ifd.add_tag(DngTag::CFAPlaneColor, [0u8, 1u8, 2u8])?;
     r_ifd.add_tag(TiffCommonTag::Compression, CompressionMethod::None)?;
